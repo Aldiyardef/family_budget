@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { supabase } from '../lib/supabase';
 
 const today = new Date();
 const currentMonth = today.toISOString().slice(0, 7);
@@ -10,31 +11,34 @@ function getMonthName(month) {
   });
 }
 
-// Строим список месяцев для выпадающего выбора:
-// текущий месяц, ±12 месяцев вокруг него и все месяцы, в которых есть операции.
-// Гарантируем, что текущий выбранный месяц всегда присутствует в списке.
 function buildMonthOptions(operations, selectedMonth) {
-  const monthsSet = new Set();
-  monthsSet.add(currentMonth);
-  if (selectedMonth) monthsSet.add(selectedMonth);
+  const months = new Set();
+
+  months.add(currentMonth);
+  months.add(selectedMonth);
 
   for (let i = -12; i <= 12; i++) {
-    const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
-    monthsSet.add(d.toISOString().slice(0, 7));
+    const date = new Date(
+      today.getFullYear(),
+      today.getMonth() + i,
+      1
+    );
+
+    months.add(date.toISOString().slice(0, 7));
   }
 
-  operations.forEach((op) => {
-    if (op && op.date) monthsSet.add(op.date.slice(0, 7));
+  operations.forEach((operation) => {
+    if (operation.operation_date) {
+      months.add(String(operation.operation_date).slice(0, 7));
+    }
   });
 
-  return Array.from(monthsSet).sort((a, b) => (a < b ? 1 : -1));
+  return Array.from(months).sort((a, b) => (a < b ? 1 : -1));
 }
 
 export default function Dashboard({ session }) {
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
-  const [operations, setOperations] = useState(() => {
-    return JSON.parse(localStorage.getItem('familyBudgetOperations')) || [];
-  });
+  const [operations, setOperations] = useState([]);
 
   const [type, setType] = useState('income');
   const [amount, setAmount] = useState('');
@@ -47,64 +51,126 @@ export default function Dashboard({ session }) {
   );
 
   useEffect(() => {
-    localStorage.setItem(
-      'familyBudgetOperations',
-      JSON.stringify(operations)
-    );
-  }, [operations]);
+    async function loadOperations() {
+      const { data, error } = await supabase
+        .from('operations')
+        .select(
+          'id, user_id, type, amount, category, description, operation_date, created_at'
+        )
+        .order('operation_date', { ascending: false });
+
+      if (error) {
+        console.error('Ошибка загрузки операций:', {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+        });
+
+        return;
+      }
+
+      setOperations(data || []);
+    }
+
+    loadOperations();
+  }, []);
 
   const monthOperations = useMemo(() => {
     return operations.filter((operation) =>
-      operation.date.startsWith(selectedMonth)
+      String(operation.operation_date).startsWith(selectedMonth)
     );
   }, [operations, selectedMonth]);
 
   const income = monthOperations
     .filter((operation) => operation.type === 'income')
-    .reduce((sum, operation) => sum + operation.amount, 0);
+    .reduce((sum, operation) => sum + Number(operation.amount), 0);
 
   const expenses = monthOperations
     .filter((operation) => operation.type === 'expense')
-    .reduce((sum, operation) => sum + operation.amount, 0);
+    .reduce((sum, operation) => sum + Number(operation.amount), 0);
 
   const previousBalance = operations
-    .filter((operation) => operation.date < `${selectedMonth}-01`)
-    .reduce(
-      (balance, operation) =>
-        operation.type === 'income'
-          ? balance + operation.amount
-          : balance - operation.amount,
-      0
-    );
+    .filter(
+      (operation) =>
+        String(operation.operation_date) < `${selectedMonth}-01`
+    )
+    .reduce((balance, operation) => {
+      if (operation.type === 'income') {
+        return balance + Number(operation.amount);
+      }
+
+      return balance - Number(operation.amount);
+    }, 0);
 
   const balance = previousBalance + income - expenses;
 
-  function addOperation(event) {
+  async function addOperation(event) {
     event.preventDefault();
 
-    if (!amount || Number(amount) <= 0 || !category) {
+    if (!session?.user?.id) {
+      alert('Пользователь не авторизован');
+      return;
+    }
+
+    if (!amount || Number(amount) <= 0 || !category.trim()) {
       alert('Заполните сумму и категорию');
       return;
     }
 
-    const operation = {
-      id: Date.now(),
+    const newOperation = {
+      user_id: session.user.id,
       type,
       amount: Number(amount),
-      category,
-      description,
-      date: `${selectedMonth}-${String(today.getDate()).padStart(2, '0')}`,
+      category: category.trim(),
+      description: description.trim() || null,
+      operation_date: `${selectedMonth}-01`,
     };
 
-    setOperations([operation, ...operations]);
+    console.log('Добавляем операцию:', newOperation);
+
+    const { data, error } = await supabase
+      .from('operations')
+      .insert([newOperation])
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Ошибка добавления:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+
+      alert(error.message);
+      return;
+    }
+
+    setOperations((currentOperations) => [
+      data,
+      ...currentOperations,
+    ]);
+
     setAmount('');
     setCategory('');
     setDescription('');
   }
 
-  function deleteOperation(id) {
-    setOperations(
-      operations.filter((operation) => operation.id !== id)
+  async function deleteOperation(id) {
+    const { error } = await supabase
+      .from('operations')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Ошибка удаления:', error);
+      alert('Ошибка удаления операции');
+      return;
+    }
+
+    setOperations((currentOperations) =>
+      currentOperations.filter((operation) => operation.id !== id)
     );
   }
 
@@ -126,6 +192,7 @@ export default function Dashboard({ session }) {
 
       <section className="month-panel">
         <label htmlFor="month-select">Месяц:</label>
+
         <select
           id="month-select"
           className="month-select"
@@ -209,7 +276,10 @@ export default function Dashboard({ session }) {
       <section className="operations card">
         <div className="section-header">
           <h2>Операции</h2>
-          <span className="badge">{monthOperations.length} операций</span>
+
+          <span className="badge">
+            {monthOperations.length} операций
+          </span>
         </div>
 
         {monthOperations.length === 0 ? (
@@ -233,7 +303,7 @@ export default function Dashboard({ session }) {
               <tbody>
                 {monthOperations.map((operation) => (
                   <tr key={operation.id}>
-                    <td>{operation.date}</td>
+                    <td>{operation.operation_date}</td>
 
                     <td>
                       <strong>{operation.category}</strong>
@@ -265,13 +335,18 @@ export default function Dashboard({ session }) {
                       }
                     >
                       {operation.type === 'income' ? '+' : '-'}
-                      {operation.amount.toLocaleString('ru-RU')} ₸
+                      {Number(operation.amount).toLocaleString(
+                        'ru-RU'
+                      )}{' '}
+                      ₸
                     </td>
 
                     <td>
                       <button
                         className="delete-button"
-                        onClick={() => deleteOperation(operation.id)}
+                        onClick={() =>
+                          deleteOperation(operation.id)
+                        }
                       >
                         Удалить
                       </button>
