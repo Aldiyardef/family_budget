@@ -7,12 +7,10 @@ function pad(num) {
   return String(num).padStart(2, '0');
 }
 
-// Возвращает "YYYY-MM" по локальному времени (не UTC!)
 function formatLocalMonth(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
 }
 
-// Возвращает "YYYY-MM-DD" по локальному времени (не UTC!)
 function formatLocalDate(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
     date.getDate()
@@ -23,7 +21,6 @@ const today = new Date();
 const currentMonth = formatLocalMonth(today);
 
 function getMonthName(month) {
-  // Создаём дату локально, без часовых сдвигов
   const [year, monthNum] = month.split('-').map(Number);
   const date = new Date(year, monthNum - 1, 1);
 
@@ -72,6 +69,12 @@ export default function Dashboard({ session }) {
   const [planCategory, setPlanCategory] = useState('');
   const [planAmount, setPlanAmount] = useState('');
   const [planDescription, setPlanDescription] = useState('');
+
+  // --- Редактирование по двойному клику ---
+  const [editingId, setEditingId] = useState(null);
+  const [editingType, setEditingType] = useState(null); // 'operation' или 'plan'
+  const [editingField, setEditingField] = useState(null);
+  const [editingValue, setEditingValue] = useState('');
 
   const monthOptions = useMemo(
     () => buildMonthOptions(operations, selectedMonth),
@@ -162,21 +165,150 @@ export default function Dashboard({ session }) {
     return { planned, remaining, balanceWithPlanned };
   }, [monthPlannedExpenses, totals.expense, totals.balance]);
 
+  // --- Функции редактирования ---
+
+  function startEditingOperation(operation, field) {
+    setEditingId(operation.id);
+    setEditingType('operation');
+    setEditingField(field);
+    setEditingValue(String(operation[field]));
+  }
+
+  function startEditingPlan(plan, field) {
+    setEditingId(plan.id);
+    setEditingType('plan');
+    setEditingField(field);
+    setEditingValue(String(plan[field]));
+  }
+
+  async function saveEdit() {
+    if (!editingId || !editingType || !editingField) return;
+
+    try {
+      if (editingType === 'operation') {
+        // Валидация в зависимости от поля
+        let updateData = {};
+
+        if (editingField === 'amount') {
+          const num = Number(editingValue);
+          if (isNaN(num) || num <= 0) {
+            alert('Сумма должна быть положительным числом');
+            return;
+          }
+          updateData.amount = num;
+        } else if (editingField === 'operation_date') {
+          // Проверка формата даты (YYYY-MM-DD)
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(editingValue)) {
+            alert('Дата должна быть в формате YYYY-MM-DD');
+            return;
+          }
+          updateData.operation_date = editingValue;
+        } else {
+          updateData[editingField] = editingValue;
+        }
+
+        const { data, error } = await supabase
+          .from('operations')
+          .update(updateData)
+          .eq('id', editingId)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        setOperations((prev) =>
+          prev.map((o) => (o.id === editingId ? data : o))
+        );
+      } else if (editingType === 'plan') {
+        let updateData = {};
+
+        if (editingField === 'amount') {
+          const num = Number(editingValue);
+          if (isNaN(num) || num <= 0) {
+            alert('Сумма должна быть положительным числом');
+            return;
+          }
+          updateData.amount = num;
+        } else if (editingField === 'month') {
+          // Проверка формата месяца (YYYY-MM)
+          if (!/^\d{4}-\d{2}$/.test(editingValue)) {
+            alert('Месяц должен быть в формате YYYY-MM');
+            return;
+          }
+          updateData.month = editingValue;
+        } else {
+          updateData[editingField] = editingValue;
+        }
+
+        const { data, error } = await supabase
+          .from('planned_expenses')
+          .update(updateData)
+          .eq('id', editingId)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        setPlannedExpenses((prev) =>
+          prev.map((p) => (p.id === editingId ? data : p))
+        );
+      }
+
+      cancelEdit();
+    } catch (error) {
+      console.error('Ошибка сохранения:', error);
+      alert('Ошибка при сохранении изменений');
+    }
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditingType(null);
+    setEditingField(null);
+    setEditingValue('');
+  }
+
+  function handleEditKeyDown(e) {
+    if (e.key === 'Enter') {
+      saveEdit();
+    } else if (e.key === 'Escape') {
+      cancelEdit();
+    }
+  }
+
+  // --- Компонент EditableCell для уменьшения дублирования ---
+  function EditableCell({ value, isEditing, onChange, onSave, onCancel, onKeyDown, dataType = 'text' }) {
+    if (isEditing) {
+      return (
+        <input
+          autoFocus
+          type={dataType}
+          value={editingValue}
+          onChange={(e) => setEditingValue(e.target.value)}
+          onBlur={onSave}
+          onKeyDown={onKeyDown}
+          style={{
+            width: '100%',
+            padding: '4px 8px',
+            border: '2px solid #007bff',
+            borderRadius: '4px',
+            fontSize: '14px',
+          }}
+        />
+      );
+    }
+
+    return (
+      <span style={{ cursor: 'pointer', userSelect: 'none' }}>
+        {value}
+      </span>
+    );
+  }
+
   async function handleAddOperation(e) {
     e.preventDefault();
 
     if (!amount || !category) return;
-
-    // Формируем дату операции локально:
-    // если выбранный месяц — текущий, ставим сегодняшнее число,
-    // иначе — 1-е число выбранного месяца.
-    const [year, monthNum] = selectedMonth.split('-').map(Number);
-
-    const isCurrentMonth = selectedMonth === currentMonth;
-
-    const operationDateObj = isCurrentMonth
-      ? today
-      : new Date(year, monthNum - 1, 1);
 
     const newOperation = {
       user_id: session.user.id,
@@ -184,7 +316,7 @@ export default function Dashboard({ session }) {
       amount: Number(amount),
       category,
       description,
-      operation_date: formatLocalDate(operationDateObj),
+      operation_date: selectedMonth === currentMonth ? formatLocalDate(today) : `${selectedMonth}-01`,
     };
 
     const { data, error } = await supabase
@@ -453,7 +585,7 @@ export default function Dashboard({ session }) {
             <table>
               <thead>
                 <tr>
-                  <th>Дата</th>
+                  <th>Месяц</th>
                   <th>Категория</th>
                   <th>Описание</th>
                   <th>Тип</th>
@@ -465,13 +597,78 @@ export default function Dashboard({ session }) {
               <tbody>
                 {monthPlannedExpenses.map((plan) => (
                   <tr key={plan.id}>
-                    <td>{plan.month}-01</td>
-
-                    <td>
-                      <strong>{plan.category}</strong>
+                    <td onDoubleClick={() => startEditingPlan(plan, 'month')}>
+                      {editingId === plan.id && editingType === 'plan' && editingField === 'month' ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          placeholder="YYYY-MM"
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <span style={{ cursor: 'pointer', userSelect: 'none' }}>
+                          {plan.month}
+                        </span>
+                      )}
                     </td>
 
-                    <td>{plan.description || 'Без описания'}</td>
+                    <td onDoubleClick={() => startEditingPlan(plan, 'category')}>
+                      {editingId === plan.id && editingType === 'plan' && editingField === 'category' ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <strong style={{ cursor: 'pointer', userSelect: 'none' }}>
+                          {plan.category}
+                        </strong>
+                      )}
+                    </td>
+
+                    <td onDoubleClick={() => startEditingPlan(plan, 'description')}>
+                      {editingId === plan.id && editingType === 'plan' && editingField === 'description' ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <span style={{ cursor: 'pointer', userSelect: 'none' }}>
+                          {plan.description || 'Без описания'}
+                        </span>
+                      )}
+                    </td>
 
                     <td>
                       <span
@@ -487,8 +684,28 @@ export default function Dashboard({ session }) {
                       </span>
                     </td>
 
-                    <td className="amount-expense">
-                      {Number(plan.amount).toLocaleString('ru-RU')} ₸
+                    <td onDoubleClick={() => startEditingPlan(plan, 'amount')}>
+                      {editingId === plan.id && editingType === 'plan' && editingField === 'amount' ? (
+                        <input
+                          autoFocus
+                          type="number"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <span className="amount-expense" style={{ cursor: 'pointer', userSelect: 'none' }}>
+                          {Number(plan.amount).toLocaleString('ru-RU')} ₸
+                        </span>
+                      )}
                     </td>
 
                     <td>
@@ -537,13 +754,77 @@ export default function Dashboard({ session }) {
               <tbody>
                 {monthOperations.map((operation) => (
                   <tr key={operation.id}>
-                    <td>{operation.operation_date}</td>
-
-                    <td>
-                      <strong>{operation.category}</strong>
+                    <td onDoubleClick={() => startEditingOperation(operation, 'operation_date')}>
+                      {editingId === operation.id && editingType === 'operation' && editingField === 'operation_date' ? (
+                        <input
+                          autoFocus
+                          type="date"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <span style={{ cursor: 'pointer', userSelect: 'none' }}>
+                          {operation.operation_date}
+                        </span>
+                      )}
                     </td>
 
-                    <td>{operation.description || 'Без описания'}</td>
+                    <td onDoubleClick={() => startEditingOperation(operation, 'category')}>
+                      {editingId === operation.id && editingType === 'operation' && editingField === 'category' ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <strong style={{ cursor: 'pointer', userSelect: 'none' }}>
+                          {operation.category}
+                        </strong>
+                      )}
+                    </td>
+
+                    <td onDoubleClick={() => startEditingOperation(operation, 'description')}>
+                      {editingId === operation.id && editingType === 'operation' && editingField === 'description' ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <span style={{ cursor: 'pointer', userSelect: 'none' }}>
+                          {operation.description || 'Без описания'}
+                        </span>
+                      )}
+                    </td>
 
                     <td>
                       <span
@@ -557,15 +838,36 @@ export default function Dashboard({ session }) {
                       </span>
                     </td>
 
-                    <td
-                      className={
-                        operation.type === 'income'
-                          ? 'amount-income'
-                          : 'amount-expense'
-                      }
-                    >
-                      {operation.type === 'income' ? '+' : '-'}
-                      {Number(operation.amount).toLocaleString('ru-RU')} ₸
+                    <td onDoubleClick={() => startEditingOperation(operation, 'amount')}>
+                      {editingId === operation.id && editingType === 'operation' && editingField === 'amount' ? (
+                        <input
+                          autoFocus
+                          type="number"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={handleEditKeyDown}
+                          style={{
+                            width: '100%',
+                            padding: '4px 8px',
+                            border: '2px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className={
+                            operation.type === 'income'
+                              ? 'amount-income'
+                              : 'amount-expense'
+                          }
+                          style={{ cursor: 'pointer', userSelect: 'none' }}
+                        >
+                          {operation.type === 'income' ? '+' : '-'}
+                          {Number(operation.amount).toLocaleString('ru-RU')} ₸
+                        </span>
+                      )}
                     </td>
 
                     <td>
