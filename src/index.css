@@ -409,6 +409,7 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+  table-layout: fixed; /* ДОБАВЛЕНО: одинаковая раскладка колонок для всех таблиц на десктопе */
 }
 
 th,
