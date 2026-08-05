@@ -135,9 +135,10 @@ export default function Dashboard({ session }) {
     );
 
     const remaining = planned - totals.expense;
+    const balanceWithPlanned = totals.balance - planned;
 
-    return { planned, remaining };
-  }, [monthPlannedExpenses, totals.expense]);
+    return { planned, remaining, balanceWithPlanned };
+  }, [monthPlannedExpenses, totals.expense, totals.balance]);
 
   async function handleAddOperation(e) {
     e.preventDefault();
@@ -309,15 +310,17 @@ export default function Dashboard({ session }) {
         </div>
 
         <div className="summary-card card">
-          <span className="summary-label">Остаток от плана</span>
+          <span className="summary-label">
+            Баланс с учётом планируемых расходов
+          </span>
           <span
             className={
-              plannedTotals.remaining >= 0
+              plannedTotals.balanceWithPlanned >= 0
                 ? 'summary-value amount-income'
                 : 'summary-value amount-expense'
             }
           >
-            {plannedTotals.remaining.toLocaleString('ru-RU')} ₸
+            {plannedTotals.balanceWithPlanned.toLocaleString('ru-RU')} ₸
           </span>
         </div>
       </div>
