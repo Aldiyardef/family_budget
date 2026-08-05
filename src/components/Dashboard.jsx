@@ -1,11 +1,33 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
+// --- Безопасные функции работы с датами (без UTC-сдвига) ---
+
+function pad(num) {
+  return String(num).padStart(2, '0');
+}
+
+// Возвращает "YYYY-MM" по локальному времени (не UTC!)
+function formatLocalMonth(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+}
+
+// Возвращает "YYYY-MM-DD" по локальному времени (не UTC!)
+function formatLocalDate(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate()
+  )}`;
+}
+
 const today = new Date();
-const currentMonth = today.toISOString().slice(0, 7);
+const currentMonth = formatLocalMonth(today);
 
 function getMonthName(month) {
-  return new Date(`${month}-01`).toLocaleDateString('ru-RU', {
+  // Создаём дату локально, без часовых сдвигов
+  const [year, monthNum] = month.split('-').map(Number);
+  const date = new Date(year, monthNum - 1, 1);
+
+  return date.toLocaleDateString('ru-RU', {
     month: 'long',
     year: 'numeric',
   });
@@ -24,7 +46,7 @@ function buildMonthOptions(operations, selectedMonth) {
       1
     );
 
-    months.add(date.toISOString().slice(0, 7));
+    months.add(formatLocalMonth(date));
   }
 
   operations.forEach((operation) => {
@@ -145,13 +167,24 @@ export default function Dashboard({ session }) {
 
     if (!amount || !category) return;
 
+    // Формируем дату операции локально:
+    // если выбранный месяц — текущий, ставим сегодняшнее число,
+    // иначе — 1-е число выбранного месяца.
+    const [year, monthNum] = selectedMonth.split('-').map(Number);
+
+    const isCurrentMonth = selectedMonth === currentMonth;
+
+    const operationDateObj = isCurrentMonth
+      ? today
+      : new Date(year, monthNum - 1, 1);
+
     const newOperation = {
       user_id: session.user.id,
       type,
       amount: Number(amount),
       category,
       description,
-      operation_date: `${selectedMonth}-01`,
+      operation_date: formatLocalDate(operationDateObj),
     };
 
     const { data, error } = await supabase
