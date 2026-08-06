@@ -137,6 +137,18 @@ export default function Dashboard({ session }) {
     [plannedExpenses, selectedMonth]
   );
 
+  // Накопительный остаток со всех предыдущих месяцев
+  const previousBalance = useMemo(() => {
+    return operations.reduce((sum, operation) => {
+      const opMonth = String(operation.operation_date).slice(0, 7);
+      if (opMonth >= selectedMonth) return sum;
+
+      return operation.type === 'income'
+        ? sum + Number(operation.amount)
+        : sum - Number(operation.amount);
+    }, 0);
+  }, [operations, selectedMonth]);
+
   const totals = useMemo(() => {
     const income = monthOperations
       .filter((o) => o.type === 'income')
@@ -149,9 +161,9 @@ export default function Dashboard({ session }) {
     return {
       income,
       expense,
-      balance: income - expense,
+      balance: previousBalance + income - expense,
     };
-  }, [monthOperations]);
+  }, [monthOperations, previousBalance]);
 
   const plannedTotals = useMemo(() => {
     const planned = monthPlannedExpenses.reduce(
@@ -159,11 +171,31 @@ export default function Dashboard({ session }) {
       0
     );
 
-    const remaining = planned - totals.expense;
-    const balanceWithPlanned = totals.balance - planned;
+    // Невыполненные планы из предыдущих месяцев продолжают давить на баланс
+    const previousUnfinishedPlanned = plannedExpenses.reduce((sum, p) => {
+      if (p.month >= selectedMonth) return sum;
+      if (p.is_done) return sum;
 
-    return { planned, remaining, balanceWithPlanned };
-  }, [monthPlannedExpenses, totals.expense, totals.balance]);
+      return sum + Number(p.amount);
+    }, 0);
+
+    const remaining = planned - totals.expense;
+    const balanceWithPlanned =
+      totals.balance - planned - previousUnfinishedPlanned;
+
+    return {
+      planned,
+      remaining,
+      balanceWithPlanned,
+      previousUnfinishedPlanned,
+    };
+  }, [
+    monthPlannedExpenses,
+    plannedExpenses,
+    selectedMonth,
+    totals.expense,
+    totals.balance,
+  ]);
 
   // --- Функции редактирования ---
 
